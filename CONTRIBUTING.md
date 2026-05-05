@@ -1,82 +1,247 @@
-# Contributing Guidelines
+# Contributing — Azure Entra ID SSO Adapter for SigNoz
 
-Thank you for your interest in contributing to our project! We greatly value feedback and contributions from our community. This document will guide you through the contribution process.
+This guide covers development workflow for the Entra SSO adapter project. It targets contributors working on the OIDC integration code within the SigNoz community edition.
 
-## How can I contribute?
+---
 
-### Finding Issues to Work On
-- Check our [existing open issues](https://github.com/SigNoz/signoz/issues?q=is%3Aopen+is%3Aissue)
-- Look for [good first issues](https://github.com/SigNoz/signoz/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) to start with
-- Review [recently closed issues](https://github.com/SigNoz/signoz/issues?q=is%3Aissue+is%3Aclosed) to avoid duplicates
+## Prerequisites
 
-### Types of Contributions
+- **Go 1.25+** — the module requires Go 1.25 (`go.mod`)
+- **Docker & Docker Compose** — for running the full SigNoz stack
+- **Node.js 18+** — only if working on the frontend (not required for SSO backend work)
+- **An Azure Entra ID test tenant** — for end-to-end testing (free tier available at [Azure Portal](https://portal.azure.com))
 
-1. **Report Bugs**: Use our [Bug Report template](https://github.com/SigNoz/signoz/issues/new?assignees=&labels=&template=bug_report.md&title=)
-2. **Request Features**: Submit using [Feature Request template](https://github.com/SigNoz/signoz/issues/new?assignees=&labels=&template=feature_request.md&title=)
-3. **Improve Documentation**: Create an issue with the `documentation` label
-4. **Report Performance Issues**: Use our [Performance Issue template](https://github.com/SigNoz/signoz/issues/new?assignees=&labels=&template=performance-issue-report.md&title=)
-5. **Request Dashboards**: Submit using [Dashboard Request template](https://github.com/SigNoz/signoz/issues/new?assignees=&labels=dashboard-template&projects=&template=request_dashboard.md&title=%5BDashboard+Request%5D+)
-6. **Report Security Issues**: Follow our [Security Policy](https://github.com/SigNoz/signoz/security/policy)
-7. **Join Discussions**: Participate in [project discussions](https://github.com/SigNoz/signoz/discussions)
+---
 
-### Creating Helpful Issues
+## Local Dev Setup
 
-When creating issues, include:
+### 1. Clone and branch
 
-- **For Feature Requests**:
-  - Clear use case and requirements
-  - Proposed solution or improvement
-  - Any open questions or considerations
+```bash
+git clone https://github.com/SigNoz/signoz.git
+cd signoz
+git checkout -b your-feature-branch
+```
 
-- **For Bug Reports**:
-  - Step-by-step reproduction steps
-  - Version information
-  - Relevant environment details
-  - Any modifications you've made
-  - Expected vs actual behavior
+### 2. Install Go dependencies
 
-### Submitting Pull Requests
+```bash
+go mod download
+```
 
-1. **Development**:
-   - Setup your [development environment](docs/contributing/development.md)
-   - Work against the latest `main` branch
-   - Focus on specific changes
-   - Ensure all tests pass locally
-   - Follow our [commit convention](#commit-convention)
+### 3. Run the backend (query-service)
 
-2. **Submit PR**:
-   - Ensure your branch can be auto-merged
-   - Address any CI failures
-   - Respond to review comments promptly
+```bash
+# From the repo root
+go run ./cmd/signoz/ --config ./cmd/signoz/config.yaml
+```
 
-For substantial changes, please split your contribution into multiple PRs:
+Or build and run:
 
-1. First PR: Overall structure (README, configurations, interfaces)
-2. Second PR: Core implementation (split further if needed)
-3. Final PR: Documentation updates and end-to-end tests
+```bash
+go build -o signoz ./cmd/signoz/
+./signoz --config ./cmd/signoz/config.yaml
+```
 
-### Commit Convention
+### 4. Run with Docker Compose (full stack)
 
-We follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). All commits and PRs should include type specifiers (e.g., `feat:`, `fix:`, `docs:`, etc.).
+```bash
+cd deploy/docker
 
-## How can I contribute to other repositories?
+# Base stack (no SSO)
+docker compose up -d
 
-You can find other repositories in the [SigNoz](https://github.com/SigNoz) organization to contribute to. Here is a list of **highlighted** repositories:
+# With Entra SSO overlay
+cp .env.example .env
+# Edit .env with your Entra configuration
+docker compose -f docker-compose.yaml -f docker-compose-entra-sso.yaml up -d
+```
 
-- [charts](https://github.com/SigNoz/charts)
-- [dashboards](https://github.com/SigNoz/dashboards)
+### 5. Verify
 
-Each repository has its own contributing guidelines. Please refer to the guidelines of the repository you want to contribute to.
+Open `http://localhost:8080`. If SSO is configured, entering an email matching the configured domain should redirect to Entra login.
 
-## How can I get help?
+---
 
-Need assistance? Join our Slack community:
-- [`#contributing`](https://signoz-community.slack.com/archives/C01LWQ8KS7M)
-- [`#contributing-frontend`](https://signoz-community.slack.com/archives/C027134DM8B)
+## Project Structure (SSO-Relevant)
 
-## Where do I go from here?
+```
+pkg/
+├── authn/
+│   ├── authn.go                              # CallbackAuthN interface
+│   └── callbackauthn/
+│       ├── googlecallbackauthn/authn.go       # Reference: Google OIDC
+│       └── oidccallbackauthn/authn.go         # NEW: Entra/OIDC adapter
+├── types/authtypes/
+│   ├── authn.go                               # AuthNProvider constants
+│   ├── oidc.go                                # OIDCConfig
+│   ├── domain.go                              # AuthDomain
+│   └── mapping.go                             # RoleMapping, AttributeMapping
+├── modules/session/implsession/
+│   ├── module.go                              # CreateCallbackAuthNSession
+│   └── handler.go                             # HTTP handlers
+├── signoz/
+│   └── authn.go                               # Provider registration
+deploy/docker/
+├── docker-compose.yaml                        # Base stack
+└── docker-compose-entra-sso.yaml              # SSO overlay
+```
 
-- Set up your [development environment](docs/contributing/development.md)
-- Deploy and observe [SigNoz in action with OpenTelemetry Demo Application](docs/otel-demo-docs.md)
-- Explore the [SigNoz Community Advocate Program](ADVOCATE.md), which recognises contributors who support the community, share their expertise, and help shape SigNoz's future.
-- Write [integration tests](docs/contributing/go/integration.md)
+---
+
+## How to Run Tests
+
+### Unit tests (all)
+
+```bash
+go test ./...
+```
+
+### Unit tests (SSO adapter only)
+
+```bash
+go test ./pkg/authn/callbackauthn/oidccallbackauthn/...
+```
+
+### Unit tests (session module — covers callback flow)
+
+```bash
+go test ./pkg/modules/session/...
+```
+
+### With verbose output
+
+```bash
+go test -v -count=1 ./pkg/authn/callbackauthn/oidccallbackauthn/...
+```
+
+### Race detection
+
+```bash
+go test -race ./pkg/authn/callbackauthn/oidccallbackauthn/...
+```
+
+---
+
+## Commit Message Conventions
+
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+### Types
+
+| Type | Use for |
+|---|---|
+| `feat` | New feature (e.g., OIDC adapter implementation) |
+| `fix` | Bug fix |
+| `refactor` | Code restructuring without behavior change |
+| `test` | Adding or updating tests |
+| `docs` | Documentation only |
+| `chore` | Build, CI, dependency updates |
+
+### Scope
+
+Use `entra-sso` or the specific package name:
+
+```
+feat(entra-sso): implement OIDC callback handler
+fix(oidccallbackauthn): handle issuer alias for Azure endpoints
+test(entra-sso): add mock OIDC provider integration tests
+docs(entra-sso): add deployment guide for operators
+```
+
+### Examples
+
+```
+feat(entra-sso): implement CallbackAuthN for OIDC/Entra ID
+
+Adds oidccallbackauthn package that implements the authn.CallbackAuthN
+interface using coreos/go-oidc for OIDC discovery and token verification.
+Supports Entra's issuer alias, group claims, and claim mapping.
+
+Closes #123
+```
+
+---
+
+## Dependency Rules
+
+- **Pin all direct dependencies** — they are tracked in `go.mod` and `go.sum`.
+- **No new dependencies** for the OIDC adapter — `coreos/go-oidc/v3` and `golang.org/x/oauth2` are already in the module.
+- **Do not add MSAL Go SDK** — the vision mentions MSAL, but `go-oidc` + standard OAuth2 is the correct Go-idiomatic approach. MSAL for Go is primarily for Azure SDK integration, not standalone OIDC.
+- Before adding any new dependency, check if an existing one serves the purpose.
+- Run `go mod tidy` after any dependency change.
+
+---
+
+## Licensing Constraint
+
+**MUST NOT read, reference, or use any code under `ee/` or `cmd/enterprise/`.** These directories are under the SigNoz Enterprise License. All code in this project must be compatible with the MIT license.
+
+You may read and build upon anything else in the repository.
+
+---
+
+## OpenSpec Workflow
+
+This project uses OpenSpec for structured change management:
+
+1. **Vision** — `product-vision/` contains the signed-off project vision
+2. **Architecture** — `docs/architecture.md` describes how the adapter integrates
+3. **Decisions** — `docs/decisions/` contains ADRs for key choices
+4. **Changes** — Each feature/fix follows the OpenSpec artifact workflow
+
+When making a change:
+- Check for an existing OpenSpec change proposal before starting
+- Reference the relevant change ID in commit messages and PRs
+- Update architecture docs if your change affects module boundaries or data flow
+
+---
+
+## Code Review Expectations
+
+### For authors
+
+- One PR per logical change (one feature, one bug fix, one refactor)
+- Include tests for new code — mock OIDC provider for unit tests
+- Ensure `go vet`, `go test`, and `go build` pass
+- Update `docs/architecture.md` if you change the integration design
+- Do not commit secrets, `.env` files, or client credentials
+
+### For reviewers
+
+- Verify no `ee/` or `cmd/enterprise/` imports
+- Check that the `CallbackAuthN` interface contract is maintained
+- Verify structured logging uses `slog` with context
+- Confirm environment variable names follow the `SIGNOZ_ENTRA_` prefix convention
+- Test the auth flow mentally: LoginURL → Entra → callback → token exchange → claims → role mapping → JIT provision → JWT → redirect
+
+---
+
+## Troubleshooting
+
+### OIDC discovery fails
+
+Check that `SIGNOZ_ENTRA_TENANT_ID` is correct. The discovery URL is:
+```
+https://login.microsoftonline.com/{tenant-id}/v2.0/.well-known/openid-configuration
+```
+
+### Token verification fails
+
+Entra's issuer in the ID token (`iss` claim) may differ from the discovery URL. The `OIDCConfig.IssuerAlias` field handles this — ensure it's set if needed.
+
+### Group claims missing
+
+In Azure Portal: App Registration → Token configuration → Add groups claim → Select "Security groups". If the user is in more than 150 groups, Entra returns an overage indicator instead of inline groups — this is a known limitation.
+
+### Role mapping not working
+
+Check that the Entra group object IDs (GUIDs) in your env vars match exactly. Use Azure Portal → Groups → select group → copy Object ID.

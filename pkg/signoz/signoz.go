@@ -26,6 +26,7 @@ import (
 	"github.com/SigNoz/signoz/pkg/modules/dashboard"
 	"github.com/SigNoz/signoz/pkg/modules/organization"
 	"github.com/SigNoz/signoz/pkg/modules/organization/implorganization"
+	"github.com/SigNoz/signoz/pkg/modules/authdomain/implauthdomain"
 	"github.com/SigNoz/signoz/pkg/modules/serviceaccount"
 	"github.com/SigNoz/signoz/pkg/modules/serviceaccount/implserviceaccount"
 	"github.com/SigNoz/signoz/pkg/modules/user/impluser"
@@ -389,6 +390,11 @@ func New(
 	store := sqlauthnstore.NewStore(sqlstore)
 	authNs, err := authNsCallback(ctx, providerSettings, store, licensing)
 	if err != nil {
+		return nil, err
+	}
+
+	// Bootstrap Entra SSO AuthDomain from environment variables
+	if err := BootstrapEntraSSO(ctx, instrumentation.Logger(), implauthdomain.NewStore(sqlstore), orgGetter); err != nil {
 		return nil, err
 	}
 
