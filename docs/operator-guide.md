@@ -127,6 +127,8 @@ This step controls **who is allowed to log in** to SigNoz.
    cp .env.example .env
    ```
 
+   `.env.example` is the **complete** environment template for this deployment — not just the Entra-specific additions — so this command will overwrite any existing `.env` file in that directory. The example includes `COMPOSE_PROJECT_NAME=signoz` for completeness; leave it set to `signoz` so Docker Compose names containers, volumes, and networks consistently with the upstream SigNoz stack.
+
 2. Open `.env` and fill in the values from step 2:
 
    ```bash
