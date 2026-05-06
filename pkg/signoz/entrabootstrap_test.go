@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,9 +19,18 @@ import (
 
 type mockOrgGetter struct {
 	orgs []*types.Organization
+	// appearAfterCalls: if > 0, the first N calls to ListByOwnedKeyRange return
+	// nil; subsequent calls return orgs. Used to simulate the user reconciler
+	// creating the first org partway through bootstrap's wait.
+	appearAfterCalls int
+	calls            int
 }
 
 func (m *mockOrgGetter) ListByOwnedKeyRange(_ context.Context) ([]*types.Organization, error) {
+	m.calls++
+	if m.appearAfterCalls > 0 && m.calls <= m.appearAfterCalls {
+		return nil, nil
+	}
 	return m.orgs, nil
 }
 
@@ -192,15 +202,35 @@ func TestBootstrap_ErrorOnMissingRequiredEnvVars(t *testing.T) {
 	}
 }
 
-func TestBootstrap_SkipsWhenNoOrgExists(t *testing.T) {
+func TestBootstrap_TimesOutWhenNoOrgAppears(t *testing.T) {
 	setEntraEnvVars(t, allRequiredEnvVars())
 
 	store := newMockAuthDomainStore()
 	orgGetter := &mockOrgGetter{orgs: nil}
 
-	err := BootstrapEntraSSO(context.Background(), slog.Default(), store, orgGetter)
-	require.NoError(t, err)
+	// Use a tiny timeout so the test finishes in ~100ms.
+	err := bootstrapEntraSSO(context.Background(), slog.Default(), store, orgGetter, 100*time.Millisecond, 20*time.Millisecond)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SIGNOZ_USER_ROOT_EMAIL")
+	assert.Contains(t, err.Error(), "SIGNOZ_USER_ROOT_PASSWORD")
 	assert.Empty(t, store.domains)
+}
+
+func TestBootstrap_WaitsForOrgAndSucceeds(t *testing.T) {
+	setEntraEnvVars(t, allRequiredEnvVars())
+
+	orgID := valuer.GenerateUUID()
+	store := newMockAuthDomainStore()
+	orgGetter := &mockOrgGetter{
+		orgs:             []*types.Organization{{Identifiable: types.Identifiable{ID: orgID}, Name: "test-org"}},
+		appearAfterCalls: 2, // empty for first 2 calls, populated thereafter
+	}
+
+	err := bootstrapEntraSSO(context.Background(), slog.Default(), store, orgGetter, 1*time.Second, 20*time.Millisecond)
+	require.NoError(t, err)
+	require.Len(t, store.domains, 1)
+	require.NotNil(t, store.domains["corp.com:"+orgID.String()])
+	assert.GreaterOrEqual(t, orgGetter.calls, 3)
 }
 
 func TestBootstrap_CreatesAuthDomain(t *testing.T) {

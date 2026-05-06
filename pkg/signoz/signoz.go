@@ -82,6 +82,10 @@ type SigNoz struct {
 	Flagger                flagger.Flagger
 	Gateway                gateway.Gateway
 	Auditor                auditor.Auditor
+
+	entrabootstrapAuthDomainStore authtypes.AuthDomainStore
+	entrabootstrapOrgGetter       organization.Getter
+	entrabootstrapLogger          *slog.Logger
 }
 
 func New(
@@ -393,11 +397,6 @@ func New(
 		return nil, err
 	}
 
-	// Bootstrap Entra SSO AuthDomain from environment variables
-	if err := BootstrapEntraSSO(ctx, instrumentation.Logger(), implauthdomain.NewStore(sqlstore), orgGetter); err != nil {
-		return nil, err
-	}
-
 	// Initialize telemetry metadata store
 	// TODO: consolidate other telemetrymetadata.NewTelemetryMetaStore initializations to reuse this instance instead.
 	telemetryMetadataStore := telemetrymetadata.NewTelemetryMetaStore(
@@ -546,5 +545,9 @@ func New(
 		Flagger:                flagger,
 		Gateway:                gateway,
 		Auditor:                auditor,
+
+		entrabootstrapAuthDomainStore: implauthdomain.NewStore(sqlstore),
+		entrabootstrapOrgGetter:       orgGetter,
+		entrabootstrapLogger:          instrumentation.Logger(),
 	}, nil
 }

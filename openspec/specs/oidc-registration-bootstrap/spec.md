@@ -48,9 +48,22 @@ The bootstrap SHALL construct a `RoleMapping` from `SIGNOZ_ENTRA_ADMIN_GROUP_ID`
 - **WHEN** neither admin nor editor group env vars are set
 - **THEN** `RoleMapping.GroupMappings` is empty and `DefaultRole` is `"VIEWER"`
 
-### Requirement: Bootstrap skips when no org exists
-If no organization exists yet (first startup before any user has signed up), the bootstrap SHALL skip with an info-level log and no error.
+### Requirement: Bootstrap waits for first org instead of skipping
+When `SIGNOZ_ENTRA_SSO_ENABLED=true`, all required env vars are set, and no organization exists yet, `BootstrapEntraSSO` SHALL poll for the first organization on a bounded retry loop rather than skipping. The poll SHALL succeed once an organization appears (e.g. created by the `SIGNOZ_USER_ROOT_*` reconciler) and SHALL return an error if the timeout elapses without an organization appearing.
 
-#### Scenario: First startup with no org
-- **WHEN** `SIGNOZ_ENTRA_SSO_ENABLED=true` but no org exists in the database
-- **THEN** bootstrap logs an info message and returns nil (no error)
+#### Scenario: First startup, org appears mid-poll
+- **GIVEN** `SIGNOZ_ENTRA_SSO_ENABLED=true` and all required env vars are set
+- **AND** no organization exists when `BootstrapEntraSSO` is first called
+- **WHEN** an organization appears in the database before the timeout elapses
+- **THEN** `BootstrapEntraSSO` proceeds to create the AuthDomain for that organization and returns nil
+
+#### Scenario: First startup, no org appears within timeout
+- **GIVEN** `SIGNOZ_ENTRA_SSO_ENABLED=true` and all required env vars are set
+- **AND** no organization is ever created during the wait window
+- **WHEN** the timeout elapses
+- **THEN** `BootstrapEntraSSO` returns a non-nil error explaining that no organization was found and pointing operators at `SIGNOZ_USER_ROOT_*`
+
+#### Scenario: Org exists immediately at startup
+- **GIVEN** `SIGNOZ_ENTRA_SSO_ENABLED=true` and an organization already exists
+- **WHEN** `BootstrapEntraSSO` is called
+- **THEN** the AuthDomain is created/updated on the first attempt without polling

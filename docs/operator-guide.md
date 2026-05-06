@@ -1,7 +1,7 @@
 # Operator Deployment Guide — SigNoz with Azure Entra ID SSO
 
 > **Audience**: Platform engineers and IT administrators deploying SigNoz with Entra ID single sign-on  
-> **Last updated**: 2026-04-15
+> **Last updated**: 2026-05-06
 
 This guide walks through deploying SigNoz Community Edition with Azure Entra ID (formerly Azure AD) as the identity provider. By the end, users in your organization will log in to SigNoz via Entra, with their SigNoz role determined by Entra security group membership.
 
@@ -26,6 +26,7 @@ Before you begin, make sure you have:
 - **Azure Entra ID tenant** with administrator access (you will need to create app registrations and security groups).
 - **A domain or hostname for SigNoz** — either a real domain (e.g., `signoz.corp.com`) or `localhost` for local testing.
 - **TLS termination** (production only) — a reverse proxy such as nginx, Caddy, or Traefik that terminates HTTPS in front of SigNoz.
+- **Credentials for a bootstrap admin user** — for SSO-first deployments you must set `SIGNOZ_USER_ROOT_*` so the server creates the first organization on its own (see [3a. Prepare the Environment File](#3a-prepare-the-environment-file)). This admin is also a break-glass login if Entra is misconfigured or unreachable.
 
 ### Why TLS is required for production
 
@@ -121,47 +122,59 @@ This step controls **who is allowed to log in** to SigNoz.
 
 ### 3a. Prepare the Environment File
 
+`deploy/docker/.env.example` is the complete template. The actual `.env` file is gitignored — operators create it once per deployment.
+
 1. From the `deploy/docker/` directory, copy the example environment file:
 
    ```bash
    cp .env.example .env
    ```
 
-2. Open `.env` and fill in the values from step 2:
+2. Open `.env` and fill in:
+
+   - **`COMPOSE_PROJECT_NAME=signoz`** — leave as the default. This keeps Docker container, volume, and network prefixes deterministic so the names referenced throughout this guide (e.g. `signoz-signoz-1`) line up with what you see in `docker ps`.
+   - **`SIGNOZ_USER_ROOT_*`** — required for SSO-first deployments (see [Required: bootstrap admin user](#3b-required-bootstrap-admin-user) below).
+   - **`SIGNOZ_ENTRA_*`** — Entra app registration values from step 2.
+
+   The relevant rows look like:
 
    ```bash
-   # --- Required Variables ---
+   # --- Base ---
+   COMPOSE_PROJECT_NAME=signoz
 
-   # Master switch — must be "true" to enable Entra SSO
+   # --- Required for SSO-first deployments ---
+   SIGNOZ_USER_ROOT_ENABLED=true
+   SIGNOZ_USER_ROOT_EMAIL=admin@corp.com
+   SIGNOZ_USER_ROOT_PASSWORD=replace-with-a-strong-password
+   SIGNOZ_USER_ROOT_ORG_NAME=default
+
+   # --- Required Entra ---
    SIGNOZ_ENTRA_SSO_ENABLED=true
-
-   # From step 2b: App registration Overview → Directory (tenant) ID
    SIGNOZ_ENTRA_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-
-   # From step 2b: App registration Overview → Application (client) ID
    SIGNOZ_ENTRA_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-
-   # From step 2c: The client secret Value you copied
    SIGNOZ_ENTRA_CLIENT_SECRET=your-secret-value
-
-   # Your organization's email domain (e.g., corp.com)
-   # Users with this email domain will be redirected to Entra for login
    SIGNOZ_ENTRA_DOMAIN=corp.com
 
-   # --- Optional Variables ---
-
-   # From step 2a: Object ID of your SigNoz-Admins group
-   SIGNOZ_ENTRA_ADMIN_GROUP_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-
-   # From step 2a: Object ID of your SigNoz-Editors group
-   SIGNOZ_ENTRA_EDITOR_GROUP_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-
-   # Default role when a user doesn't match any group (default: VIEWER)
-   # Valid values: ADMIN, EDITOR, VIEWER
+   # --- Optional Entra ---
+   # SIGNOZ_ENTRA_ADMIN_GROUP_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+   # SIGNOZ_ENTRA_EDITOR_GROUP_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
    # SIGNOZ_ENTRA_DEFAULT_ROLE=VIEWER
    ```
 
-### 3b. Environment Variable Reference
+### 3b. Required: bootstrap admin user
+
+Stock SigNoz CE relies on the first browser visit to create an organization via the self-signup form. With SSO enabled that form is replaced by the SSO redirect, so a fresh database has no organization — and SigNoz cannot accept any agent traffic until one exists. The fix is to set `SIGNOZ_USER_ROOT_*`, which tells SigNoz to create the bootstrap organization itself, plus an admin user, on first boot.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `SIGNOZ_USER_ROOT_ENABLED` | Yes (set to `true`) | Master switch for the root user reconciler |
+| `SIGNOZ_USER_ROOT_EMAIL` | Yes | Login email for the bootstrap admin |
+| `SIGNOZ_USER_ROOT_PASSWORD` | Yes | Strong password for the bootstrap admin |
+| `SIGNOZ_USER_ROOT_ORG_NAME` | No (defaults to `default`) | Display name for the bootstrap organization |
+
+**The bootstrap admin is also your break-glass login.** If Entra ever becomes unreachable, or your app registration is misconfigured, this account is the only way to get back into SigNoz. Treat its credentials accordingly: store the password in a secret manager, rotate periodically, and consider scoping it to incident response only after SSO is verified working.
+
+### 3c. Environment Variable Reference
 
 | Variable | Required | Default | Where to Find |
 |---|---|---|---|
@@ -173,8 +186,13 @@ This step controls **who is allowed to log in** to SigNoz.
 | `SIGNOZ_ENTRA_ADMIN_GROUP_ID` | No | — | Azure Portal → Entra ID → Groups → your admin group → Object Id |
 | `SIGNOZ_ENTRA_EDITOR_GROUP_ID` | No | — | Azure Portal → Entra ID → Groups → your editor group → Object Id |
 | `SIGNOZ_ENTRA_DEFAULT_ROLE` | No | `VIEWER` | One of: `ADMIN`, `EDITOR`, `VIEWER` |
+| `COMPOSE_PROJECT_NAME` | Yes | — | Set to `signoz` (provided by `.env.example`); keeps container/volume names stable |
+| `SIGNOZ_USER_ROOT_ENABLED` | Yes (SSO-first) | `false` | Set to `true` so the bootstrap org and admin user are created automatically |
+| `SIGNOZ_USER_ROOT_EMAIL` | Yes (SSO-first) | — | Login email for the bootstrap admin / break-glass account |
+| `SIGNOZ_USER_ROOT_PASSWORD` | Yes (SSO-first) | — | Strong password for the bootstrap admin |
+| `SIGNOZ_USER_ROOT_ORG_NAME` | No | `default` | Display name for the bootstrap organization |
 
-### 3c. Role Mapping Behavior
+### 3d. Role Mapping Behavior
 
 When a user logs in through Entra SSO, SigNoz determines their role as follows:
 
@@ -186,7 +204,7 @@ If a user is in both the admin and editor groups, the highest-privilege role win
 
 Roles are assigned at **first login** via just-in-time provisioning. On subsequent logins, the existing user record is reused. To change a user's role, update their group membership in Entra — the role mapping is re-evaluated on each login during provisioning.
 
-### 3d. Start SigNoz
+### 3e. Start SigNoz
 
 From the `deploy/docker/` directory:
 
