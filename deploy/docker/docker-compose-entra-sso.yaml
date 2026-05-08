@@ -2,6 +2,7 @@ version: "3"
 
 services:
   signoz:
+    image: signoz-community:${SIGNOZ_COMMUNITY_TAG:-local}
     environment:
       - SIGNOZ_USER_ROOT_ENABLED=${SIGNOZ_USER_ROOT_ENABLED:-false}
       - SIGNOZ_USER_ROOT_EMAIL=${SIGNOZ_USER_ROOT_EMAIL:-}

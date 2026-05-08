@@ -9,16 +9,91 @@ This guide walks through deploying SigNoz Community Edition with Azure Entra ID 
 
 ## Table of Contents
 
-1. [Prerequisites](#1-prerequisites)
-2. [Azure Entra Configuration](#2-azure-entra-configuration)
-3. [SigNoz Deployment](#3-signoz-deployment)
-4. [Verification](#4-verification)
-5. [Troubleshooting](#5-troubleshooting)
-6. [Security Considerations](#6-security-considerations)
+1. [Build the Community Image](#1-build-the-community-image)
+2. [Prerequisites](#2-prerequisites)
+3. [Azure Entra Configuration](#3-azure-entra-configuration)
+4. [SigNoz Deployment](#4-signoz-deployment)
+5. [Verification](#5-verification)
+6. [Troubleshooting](#6-troubleshooting)
+7. [Security Considerations](#7-security-considerations)
 
 ---
 
-## 1. Prerequisites
+## 1. Build the Community Image
+
+**You must build a custom SigNoz container image before running the SSO compose overlay.** The upstream `signoz/signoz` image published to Docker Hub is the **enterprise** variant. Our Entra ID SSO adapter and its bootstrap logic ship in the **community** variant only — `BootstrapEntraSSO` is wired into the community server entry point (`cmd/community/server.go`); the enterprise entry point does not invoke it. Running the upstream image with `SIGNOZ_ENTRA_*` env vars produces a container that silently ignores them, the OIDC AuthDomain is never created, and SSO logins fail with no useful diagnostic.
+
+Building the community variant locally is the supported path until a community image is published.
+
+### 1a. Build prerequisites
+
+The community image is assembled from artifacts produced by Go and the frontend toolchain. Operators need:
+
+- **Go** (matches the version pinned in `go.mod`) — required for the cross-compiled `signoz-community` binary.
+- **Node.js + Yarn** — required for `yarn install && yarn build` of the React frontend (`frontend/build/`).
+- **Docker** — required for the final `docker build` step that assembles the Alpine-based runtime image.
+
+These are required only at build time. The resulting container image runs on plain Docker like any published image.
+
+### 1b. Build the image (one command)
+
+From the repository root:
+
+```bash
+make docker-build-community-local
+```
+
+This auto-detects your host architecture (`amd64` or `arm64`), runs the Go cross-compile, builds the frontend, builds the Docker image, and tags it `signoz-community:local` — which is the default tag the SSO compose overlay references. The first run can take several minutes (cold Yarn cache, full Go module download); subsequent runs are faster.
+
+On success, the target prints the next-step `docker compose ... up -d` command.
+
+### 1c. Manual two-step fallback
+
+If you want to inspect what the convenience target does, the equivalent two commands are:
+
+```bash
+# 1. Build the per-arch image (use amd64 or arm64 to match your host)
+make docker-build-community-amd64
+
+# 2. Re-tag to the name the SSO compose overlay expects
+docker tag docker.io/signoz/signoz-community:<branch>-<sha>-amd64 signoz-community:local
+```
+
+The `<branch>-<sha>-amd64` portion comes from `Makefile`'s default `VERSION` (current branch name and short SHA). Run `docker images | grep signoz-community` to see the exact tag the build produced.
+
+### 1d. Verify the build
+
+```bash
+docker images | grep signoz-community
+```
+
+You should see at least two entries:
+
+- `docker.io/signoz/signoz-community   <branch>-<sha>-<arch>` — produced by the per-arch build.
+- `signoz-community                    local` — the alias the SSO compose overlay references.
+
+### 1e. Rebuild after pulling new code
+
+`docker compose up -d` does **not** rebuild the image automatically. After `git pull` (or any local change to Go or frontend code), re-run `make docker-build-community-local` before the next `docker compose up -d`. Otherwise Compose will reuse the stale `signoz-community:local` image.
+
+If you want to pin a specific build instead of always pointing at `:local`, give it a stable name first and reference that name via `SIGNOZ_COMMUNITY_TAG`. The compose overlay expects a tag under the bare `signoz-community` repository (no `signoz/` prefix), so the per-arch image produced by `make` needs to be re-tagged before it can be pinned:
+
+```bash
+# 1. Re-tag the per-arch image under the bare repository with a stable label
+docker tag docker.io/signoz/signoz-community:<branch>-<sha>-amd64 signoz-community:my-pin
+
+# 2. In your .env, set:
+#    SIGNOZ_COMMUNITY_TAG=my-pin
+# Compose will then resolve image: signoz-community:my-pin on the signoz service.
+```
+
+Run `docker images | grep signoz-community` to confirm both the per-arch tag and your pinned alias are present before `docker compose up -d`.
+
+---
+
+## 2. Prerequisites
+
+> **Note**: If you have not already produced the community image, see [Build the Community Image](#1-build-the-community-image) above. The Docker Compose stack will not start without it.
 
 Before you begin, make sure you have:
 
@@ -26,7 +101,7 @@ Before you begin, make sure you have:
 - **Azure Entra ID tenant** with administrator access (you will need to create app registrations and security groups).
 - **A domain or hostname for SigNoz** — either a real domain (e.g., `signoz.corp.com`) or `localhost` for local testing.
 - **TLS termination** (production only) — a reverse proxy such as nginx, Caddy, or Traefik that terminates HTTPS in front of SigNoz.
-- **Credentials for a bootstrap admin user** — for SSO-first deployments you must set `SIGNOZ_USER_ROOT_*` so the server creates the first organization on its own (see [3a. Prepare the Environment File](#3a-prepare-the-environment-file)). This admin is also a break-glass login if Entra is misconfigured or unreachable.
+- **Credentials for a bootstrap admin user** — for SSO-first deployments you must set `SIGNOZ_USER_ROOT_*` so the server creates the first organization on its own (see [4a. Prepare the Environment File](#4a-prepare-the-environment-file)). This admin is also a break-glass login if Entra is misconfigured or unreachable.
 
 ### Why TLS is required for production
 
@@ -36,11 +111,11 @@ For **local testing**, Entra makes an exception: `http://localhost` redirect URI
 
 ---
 
-## 2. Azure Entra Configuration
+## 3. Azure Entra Configuration
 
 Complete these steps in the [Azure Portal](https://portal.azure.com) before deploying SigNoz.
 
-### 2a. Create Security Groups
+### 3a. Create Security Groups
 
 Security groups control which SigNoz role each user receives after login.
 
@@ -54,9 +129,9 @@ Security groups control which SigNoz role each user receives after login.
    - Click **Create**.
 5. **Record the Object ID** of each group — you will need these GUIDs later. Find them under **Groups → select the group → Overview → Object Id**.
 
-> **Note on viewers**: There is no separate viewer group. Users who authenticate but do not match any group mapping receive the default role, which is VIEWER unless you override it. If you want to restrict who can access SigNoz at all, control that via Enterprise Application assignment (step 2e), not via a viewer group.
+> **Note on viewers**: There is no separate viewer group. Users who authenticate but do not match any group mapping receive the default role, which is VIEWER unless you override it. If you want to restrict who can access SigNoz at all, control that via Enterprise Application assignment (step 3e), not via a viewer group.
 
-### 2b. Register the Application
+### 3b. Register the Application
 
 1. Navigate to **Azure Portal → Microsoft Entra ID → App registrations → New registration**.
 2. Fill in:
@@ -73,7 +148,7 @@ Security groups control which SigNoz role each user receives after login.
 
 **Why single tenant?** Multi-tenant would allow any Azure user from any organization to attempt login. Single tenant restricts authentication to users in your directory only.
 
-### 2c. Create a Client Secret
+### 3c. Create a Client Secret
 
 1. In your app registration, go to **Certificates & secrets → Client secrets → New client secret**.
 2. Enter a description (e.g., `SigNoz SSO`) and select an expiration period.
@@ -84,7 +159,7 @@ Security groups control which SigNoz role each user receives after login.
 >
 > **To rotate a secret**: Create a new secret in the Azure Portal, update `SIGNOZ_ENTRA_CLIENT_SECRET` in your `.env` file, and restart the SigNoz container (`docker compose restart signoz`). You can delete the old secret in Azure after confirming the new one works.
 
-### 2d. Configure Token Claims
+### 3d. Configure Token Claims
 
 This step tells Entra to include group membership information in the ID token so SigNoz can map users to roles.
 
@@ -96,7 +171,7 @@ That's all that's needed. The `openid`, `email`, and `profile` scopes are suffic
 
 > **What this does**: When a user authenticates, Entra includes a `groups` claim in the ID token containing the Object IDs of all security groups the user belongs to. SigNoz matches these IDs against the admin and editor group IDs you configure to determine the user's role.
 
-### 2e. Assign Users and Groups to the Enterprise Application
+### 3e. Assign Users and Groups to the Enterprise Application
 
 This step controls **who is allowed to log in** to SigNoz.
 
@@ -108,7 +183,7 @@ This step controls **who is allowed to log in** to SigNoz.
 > **Important — understand the two-layer model**:
 >
 > - **Enterprise Application assignment** (this step) controls **who can log in**. A user not assigned here will be denied access entirely.
-> - **Security group membership** (step 2a) controls **what role they get** after login. A user's group membership determines whether they are an Admin, Editor, or Viewer.
+> - **Security group membership** (step 3a) controls **what role they get** after login. A user's group membership determines whether they are an Admin, Editor, or Viewer.
 >
 > These are independent. A user must be:
 > 1. Assigned to the Enterprise Application (to authenticate at all), **AND**
@@ -118,9 +193,9 @@ This step controls **who is allowed to log in** to SigNoz.
 
 ---
 
-## 3. SigNoz Deployment
+## 4. SigNoz Deployment
 
-### 3a. Prepare the Environment File
+### 4a. Prepare the Environment File
 
 `deploy/docker/.env.example` is the complete template. The actual `.env` file is gitignored — operators create it once per deployment.
 
@@ -133,8 +208,8 @@ This step controls **who is allowed to log in** to SigNoz.
 2. Open `.env` and fill in:
 
    - **`COMPOSE_PROJECT_NAME=signoz`** — leave as the default. This keeps Docker container, volume, and network prefixes deterministic so the names referenced throughout this guide (e.g. `signoz-signoz-1`) line up with what you see in `docker ps`.
-   - **`SIGNOZ_USER_ROOT_*`** — required for SSO-first deployments (see [Required: bootstrap admin user](#3b-required-bootstrap-admin-user) below).
-   - **`SIGNOZ_ENTRA_*`** — Entra app registration values from step 2.
+   - **`SIGNOZ_USER_ROOT_*`** — required for SSO-first deployments (see [Required: bootstrap admin user](#4b-required-bootstrap-admin-user) below).
+   - **`SIGNOZ_ENTRA_*`** — Entra app registration values from section 3 (specifically the tenant ID, client ID, and client secret recorded in subsections 3b and 3c).
 
    The relevant rows look like:
 
@@ -161,7 +236,7 @@ This step controls **who is allowed to log in** to SigNoz.
    # SIGNOZ_ENTRA_DEFAULT_ROLE=VIEWER
    ```
 
-### 3b. Required: bootstrap admin user
+### 4b. Required: bootstrap admin user
 
 Stock SigNoz CE relies on the first browser visit to create an organization via the self-signup form. With SSO enabled that form is replaced by the SSO redirect, so a fresh database has no organization — and SigNoz cannot accept any agent traffic until one exists. The fix is to set `SIGNOZ_USER_ROOT_*`, which tells SigNoz to create the bootstrap organization itself, plus an admin user, on first boot.
 
@@ -174,7 +249,7 @@ Stock SigNoz CE relies on the first browser visit to create an organization via 
 
 **The bootstrap admin is also your break-glass login.** If Entra ever becomes unreachable, or your app registration is misconfigured, this account is the only way to get back into SigNoz. Treat its credentials accordingly: store the password in a secret manager, rotate periodically, and consider scoping it to incident response only after SSO is verified working.
 
-### 3c. Environment Variable Reference
+### 4c. Environment Variable Reference
 
 | Variable | Required | Default | Where to Find |
 |---|---|---|---|
@@ -192,7 +267,7 @@ Stock SigNoz CE relies on the first browser visit to create an organization via 
 | `SIGNOZ_USER_ROOT_PASSWORD` | Yes (SSO-first) | — | Strong password for the bootstrap admin |
 | `SIGNOZ_USER_ROOT_ORG_NAME` | No | `default` | Display name for the bootstrap organization |
 
-### 3d. Role Mapping Behavior
+### 4d. Role Mapping Behavior
 
 When a user logs in through Entra SSO, SigNoz determines their role as follows:
 
@@ -204,7 +279,7 @@ If a user is in both the admin and editor groups, the highest-privilege role win
 
 Roles are assigned at **first login** via just-in-time provisioning. On subsequent logins, the existing user record is reused. To change a user's role, update their group membership in Entra — the role mapping is re-evaluated on each login during provisioning.
 
-### 3e. Start SigNoz
+### 4e. Start SigNoz
 
 From the `deploy/docker/` directory:
 
@@ -226,7 +301,7 @@ SigNoz will be available at `http://localhost:8080` (or your configured host).
 
 ---
 
-## 4. Verification
+## 5. Verification
 
 After deployment, verify the SSO flow end-to-end:
 
@@ -240,11 +315,11 @@ After deployment, verify the SSO flow end-to-end:
    - Member of editor group → EDITOR
    - No matching group → VIEWER (or your configured default)
 
-If any step fails, see the [Troubleshooting](#5-troubleshooting) section below.
+If any step fails, see the [Troubleshooting](#6-troubleshooting) section below.
 
 ---
 
-## 5. Troubleshooting
+## 6. Troubleshooting
 
 ### How to view logs
 
@@ -295,7 +370,7 @@ You can test this by opening the URL in a browser (substituting your tenant ID).
 
 **Cause**: The ID token does not contain a `groups` claim.
 
-**Fix**: In the Azure Portal, go to **App registrations → your app → Token configuration**. Verify that a **groups claim** is configured with **Security groups** selected. If it is missing, add it (step 2d).
+**Fix**: In the Azure Portal, go to **App registrations → your app → Token configuration**. Verify that a **groups claim** is configured with **Security groups** selected. If it is missing, add it (step 3d).
 
 > **Note**: If a user is a member of more than 150 groups, Entra returns an "overage" indicator instead of inline group claims. This is a known Entra limitation. The workaround is to reduce the user's group count or use application-specific group assignments in Entra.
 
@@ -313,7 +388,7 @@ You can test this by opening the URL in a browser (substituting your tenant ID).
 
 **Cause**: Users are not assigned to the Enterprise Application.
 
-**Fix**: Go to **Azure Portal → Enterprise Applications → your app → Users and groups** and verify that the relevant users or groups are assigned (step 2e). Remember: Enterprise Application assignment controls who can authenticate. A user not assigned here will be blocked by Entra before they ever reach SigNoz.
+**Fix**: Go to **Azure Portal → Enterprise Applications → your app → Users and groups** and verify that the relevant users or groups are assigned (step 3e). Remember: Enterprise Application assignment controls who can authenticate. A user not assigned here will be blocked by Entra before they ever reach SigNoz.
 
 ### Everyone gets VIEWER role
 
@@ -321,7 +396,7 @@ You can test this by opening the URL in a browser (substituting your tenant ID).
 
 **Fix**: Check two things:
 1. **Group claims are enabled** — see "Group claims missing" above.
-2. **Users are in the correct security groups** — being assigned to the Enterprise Application is not the same as being in a security group. Verify that users are members of the `SigNoz-Admins` or `SigNoz-Editors` groups you created in step 2a.
+2. **Users are in the correct security groups** — being assigned to the Enterprise Application is not the same as being in a security group. Verify that users are members of the `SigNoz-Admins` or `SigNoz-Editors` groups you created in step 3a.
 3. **Group Object IDs match** — verify the GUIDs in `SIGNOZ_ENTRA_ADMIN_GROUP_ID` and `SIGNOZ_ENTRA_EDITOR_GROUP_ID` match exactly.
 
 ### Client secret expired
@@ -340,11 +415,11 @@ You can test this by opening the URL in a browser (substituting your tenant ID).
 
 ### API permissions
 
-No additional API permissions are needed beyond the defaults (`openid`, `email`, `profile`). Do **not** add `GroupMember.Read.All` or other Graph API permissions — SigNoz reads group membership from the ID token's `groups` claim (configured in step 2d), not from the Microsoft Graph API.
+No additional API permissions are needed beyond the defaults (`openid`, `email`, `profile`). Do **not** add `GroupMember.Read.All` or other Graph API permissions — SigNoz reads group membership from the ID token's `groups` claim (configured in step 3d), not from the Microsoft Graph API.
 
 ---
 
-## 6. Security Considerations
+## 7. Security Considerations
 
 ### Protect the client secret
 

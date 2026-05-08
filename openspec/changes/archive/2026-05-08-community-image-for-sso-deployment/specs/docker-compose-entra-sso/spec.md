@@ -1,47 +1,5 @@
 ## ADDED Requirements
 
-### Requirement: Compose overlay injects Entra env vars
-`deploy/docker/docker-compose-entra-sso.yaml` SHALL be valid YAML that extends the base compose file by adding `SIGNOZ_ENTRA_*` environment variables to the `signoz` service.
-
-#### Scenario: Compose config validation
-- **WHEN** `docker compose -f docker-compose.yaml -f docker-compose-entra-sso.yaml config` is run
-- **THEN** the command succeeds with exit code 0
-
-### Requirement: .env.example documents all variables
-`deploy/docker/.env.example` SHALL contain `COMPOSE_PROJECT_NAME=signoz`, all required and optional `SIGNOZ_ENTRA_*` variables, the `SIGNOZ_USER_ROOT_*` variables required for SSO-first deployments, and a documented entry for the community image tag override variable used by `docker-compose-entra-sso.yaml`. All variables SHALL appear with placeholder values and inline comments. The file SHALL be the complete template an operator copies to `.env`.
-
-#### Scenario: All variables present
-- **WHEN** the `.env.example` file is read
-- **THEN** it contains:
-  - `COMPOSE_PROJECT_NAME=signoz`
-  - `SIGNOZ_ENTRA_SSO_ENABLED`, `SIGNOZ_ENTRA_TENANT_ID`, `SIGNOZ_ENTRA_CLIENT_ID`, `SIGNOZ_ENTRA_CLIENT_SECRET`, `SIGNOZ_ENTRA_DOMAIN`
-  - `SIGNOZ_ENTRA_ADMIN_GROUP_ID`, `SIGNOZ_ENTRA_EDITOR_GROUP_ID`, `SIGNOZ_ENTRA_DEFAULT_ROLE`
-  - `SIGNOZ_USER_ROOT_ENABLED`, `SIGNOZ_USER_ROOT_EMAIL`, `SIGNOZ_USER_ROOT_PASSWORD`, `SIGNOZ_USER_ROOT_ORG_NAME`
-  - A commented entry for `SIGNOZ_COMMUNITY_TAG` (or whatever variable name the overlay uses) with an explanatory inline comment so operators discover the override
-
-### Requirement: PostgreSQL overlay is valid
-`deploy/docker/docker-compose-postgres.yaml` SHALL be valid YAML that adds a PostgreSQL service and configures the signoz service to use it.
-
-#### Scenario: PostgreSQL compose config validation
-- **WHEN** `docker compose -f docker-compose.yaml -f docker-compose-entra-sso.yaml -f docker-compose-postgres.yaml config` is run
-- **THEN** the command succeeds with exit code 0
-
-### Requirement: Compose overlay forwards SIGNOZ_USER_ROOT_* env vars
-`deploy/docker/docker-compose-entra-sso.yaml` SHALL forward `SIGNOZ_USER_ROOT_ENABLED`, `SIGNOZ_USER_ROOT_EMAIL`, `SIGNOZ_USER_ROOT_PASSWORD`, and `SIGNOZ_USER_ROOT_ORG_NAME` from the host environment into the `signoz` service so the user reconciler creates the first organization on first boot.
-
-#### Scenario: Compose config exposes root-user vars
-- **WHEN** `docker compose -f docker-compose.yaml -f docker-compose-entra-sso.yaml config` is run with the four `SIGNOZ_USER_ROOT_*` variables set in the environment
-- **THEN** the rendered config includes those variables on the `signoz` service's `environment` list and the command exits with code 0
-
-### Requirement: Operator .env file is not tracked
-`deploy/docker/.env` SHALL NOT be tracked in the repository. The file is operator-supplied (created by copying `.env.example`) and may contain secrets.
-
-#### Scenario: Operator .env is gitignored and not in the index
-- **WHEN** the repository is freshly cloned
-- **THEN** `deploy/docker/.env` does not exist in the working tree until the operator creates it
-- **AND** `.gitignore` matches `.env` so any future operator edits are not staged accidentally
-
-
 ### Requirement: Compose overlay overrides signoz service image to community variant
 `deploy/docker/docker-compose-entra-sso.yaml` SHALL override the `image:` field of the `signoz` service so that the running container is the community variant (which contains the Entra SSO adapter and `BootstrapEntraSSO` invocation in `cmd/community/server.go`) rather than the upstream enterprise variant inherited from `deploy/docker/docker-compose.yaml`. The override SHALL reference an image tag that an operator can produce locally via the existing `Makefile` community Docker build targets, and the tag SHALL be parameterizable via an environment variable so operators can pin to a specific build without editing the overlay.
 
@@ -70,3 +28,17 @@ The deployment documentation under `docs/operator-guide.md` SHALL include a sect
 - **AND** the section includes a `make` invocation that produces the community image (e.g., `make docker-build-community-amd64` or a documented convenience target)
 - **AND** the section lists Go, Node/Yarn, and Docker as build-time prerequisites
 - **AND** the section names the resulting image tag operators should see in `docker images` after a successful build
+
+## MODIFIED Requirements
+
+### Requirement: .env.example documents all variables
+`deploy/docker/.env.example` SHALL contain `COMPOSE_PROJECT_NAME=signoz`, all required and optional `SIGNOZ_ENTRA_*` variables, the `SIGNOZ_USER_ROOT_*` variables required for SSO-first deployments, and a documented entry for the community image tag override variable used by `docker-compose-entra-sso.yaml`. All variables SHALL appear with placeholder values and inline comments. The file SHALL be the complete template an operator copies to `.env`.
+
+#### Scenario: All variables present
+- **WHEN** the `.env.example` file is read
+- **THEN** it contains:
+  - `COMPOSE_PROJECT_NAME=signoz`
+  - `SIGNOZ_ENTRA_SSO_ENABLED`, `SIGNOZ_ENTRA_TENANT_ID`, `SIGNOZ_ENTRA_CLIENT_ID`, `SIGNOZ_ENTRA_CLIENT_SECRET`, `SIGNOZ_ENTRA_DOMAIN`
+  - `SIGNOZ_ENTRA_ADMIN_GROUP_ID`, `SIGNOZ_ENTRA_EDITOR_GROUP_ID`, `SIGNOZ_ENTRA_DEFAULT_ROLE`
+  - `SIGNOZ_USER_ROOT_ENABLED`, `SIGNOZ_USER_ROOT_EMAIL`, `SIGNOZ_USER_ROOT_PASSWORD`, `SIGNOZ_USER_ROOT_ORG_NAME`
+  - A commented entry for `SIGNOZ_COMMUNITY_TAG` (or whatever variable name the overlay uses) with an explanatory inline comment so operators discover the override

@@ -168,6 +168,12 @@ $(DOCKER_BUILD_ARCHS_COMMUNITY): docker-build-community-%: go-build-community-% 
 		--build-arg TARGETARCH="$*" \
 		-f $(DOCKERFILE_COMMUNITY) $(SRC)
 
+.PHONY: docker-build-community-local
+docker-build-community-local: ## Builds community image for the SSO overlay and tags it signoz-community:local (auto-detects host ARCH)
+docker-build-community-local: docker-build-community-$(ARCH)
+	@docker tag $(DOCKER_REGISTRY_COMMUNITY):$(VERSION)-$(ARCH) signoz-community:local
+	@echo ">> tagged signoz-community:local — run: docker compose -f deploy/docker/docker-compose.yaml -f deploy/docker/docker-compose-entra-sso.yaml up -d"
+
 .PHONY: docker-buildx-community
 docker-buildx-community: ## Builds the docker image for community using buildx
 docker-buildx-community: go-build-community js-build
