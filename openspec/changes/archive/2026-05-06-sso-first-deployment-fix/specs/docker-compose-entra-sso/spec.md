@@ -1,11 +1,4 @@
-## ADDED Requirements
-
-### Requirement: Compose overlay injects Entra env vars
-`deploy/docker/docker-compose-entra-sso.yaml` SHALL be valid YAML that extends the base compose file by adding `SIGNOZ_ENTRA_*` environment variables to the `signoz` service.
-
-#### Scenario: Compose config validation
-- **WHEN** `docker compose -f docker-compose.yaml -f docker-compose-entra-sso.yaml config` is run
-- **THEN** the command succeeds with exit code 0
+## MODIFIED Requirements
 
 ### Requirement: .env.example documents all variables
 `deploy/docker/.env.example` SHALL contain `COMPOSE_PROJECT_NAME=signoz`, all required and optional `SIGNOZ_ENTRA_*` variables, and the `SIGNOZ_USER_ROOT_*` variables required for SSO-first deployments. All variables SHALL appear with placeholder values and inline comments. The file SHALL be the complete template an operator copies to `.env`.
@@ -18,12 +11,7 @@
   - `SIGNOZ_ENTRA_ADMIN_GROUP_ID`, `SIGNOZ_ENTRA_EDITOR_GROUP_ID`, `SIGNOZ_ENTRA_DEFAULT_ROLE`
   - `SIGNOZ_USER_ROOT_ENABLED`, `SIGNOZ_USER_ROOT_EMAIL`, `SIGNOZ_USER_ROOT_PASSWORD`, `SIGNOZ_USER_ROOT_ORG_NAME`
 
-### Requirement: PostgreSQL overlay is valid
-`deploy/docker/docker-compose-postgres.yaml` SHALL be valid YAML that adds a PostgreSQL service and configures the signoz service to use it.
-
-#### Scenario: PostgreSQL compose config validation
-- **WHEN** `docker compose -f docker-compose.yaml -f docker-compose-entra-sso.yaml -f docker-compose-postgres.yaml config` is run
-- **THEN** the command succeeds with exit code 0
+## ADDED Requirements
 
 ### Requirement: Compose overlay forwards SIGNOZ_USER_ROOT_* env vars
 `deploy/docker/docker-compose-entra-sso.yaml` SHALL forward `SIGNOZ_USER_ROOT_ENABLED`, `SIGNOZ_USER_ROOT_EMAIL`, `SIGNOZ_USER_ROOT_PASSWORD`, and `SIGNOZ_USER_ROOT_ORG_NAME` from the host environment into the `signoz` service so the user reconciler creates the first organization on first boot.

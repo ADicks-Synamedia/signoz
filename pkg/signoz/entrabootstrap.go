@@ -5,16 +5,43 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/SigNoz/signoz/pkg/errors"
 	"github.com/SigNoz/signoz/pkg/modules/organization"
 	"github.com/SigNoz/signoz/pkg/types/authtypes"
+	"github.com/SigNoz/signoz/pkg/valuer"
 )
+
+// bootstrapOrgWaitTimeout is the maximum time BootstrapEntraSSO will wait for
+// the first organization to appear in the database. The user reconciler at
+// pkg/modules/user/impluser/service.go:58 ticks every 10 seconds; 90s gives
+// roughly 9 reconciler ticks of headroom for slow first-boot databases. If
+// the reconciler interval changes, this budget should change with it.
+const bootstrapOrgWaitTimeout = 90 * time.Second
+
+// bootstrapOrgPollInterval is how often BootstrapEntraSSO polls for the first
+// organization while waiting. It is intentionally smaller than the reconciler
+// tick so the worst-case latency between org creation and AuthDomain creation
+// stays small.
+const bootstrapOrgPollInterval = 2 * time.Second
 
 // BootstrapEntraSSO reads SIGNOZ_ENTRA_* environment variables and creates or
 // updates an AuthDomain entry in the database for Entra ID SSO. This runs at
 // startup and is idempotent — safe to call on every server start.
+//
+// On a fresh database with no organization yet, this function waits up to
+// bootstrapOrgWaitTimeout for the user reconciler (driven by SIGNOZ_USER_ROOT_*)
+// to create the first organization, then proceeds. If the timeout elapses with
+// no organization, an error is returned naming the env vars the operator must
+// set so the caller can fail startup loudly.
 func BootstrapEntraSSO(ctx context.Context, logger *slog.Logger, authDomainStore authtypes.AuthDomainStore, orgGetter organization.Getter) error {
+	return bootstrapEntraSSO(ctx, logger, authDomainStore, orgGetter, bootstrapOrgWaitTimeout, bootstrapOrgPollInterval)
+}
+
+// bootstrapEntraSSO is the testable form of BootstrapEntraSSO with injectable
+// timeout and poll interval.
+func bootstrapEntraSSO(ctx context.Context, logger *slog.Logger, authDomainStore authtypes.AuthDomainStore, orgGetter organization.Getter, waitTimeout time.Duration, pollInterval time.Duration) error {
 	if os.Getenv("SIGNOZ_ENTRA_SSO_ENABLED") != "true" {
 		return nil
 	}
@@ -37,17 +64,10 @@ func BootstrapEntraSSO(ctx context.Context, logger *slog.Logger, authDomainStore
 		return fmt.Errorf("SIGNOZ_ENTRA_SSO_ENABLED is true but SIGNOZ_ENTRA_DOMAIN is not set")
 	}
 
-	orgs, err := orgGetter.ListByOwnedKeyRange(ctx)
+	orgID, err := waitForFirstOrg(ctx, logger, orgGetter, waitTimeout, pollInterval)
 	if err != nil {
-		return fmt.Errorf("entra bootstrap: failed to list organizations: %w", err)
+		return err
 	}
-
-	if len(orgs) == 0 {
-		logger.WarnContext(ctx, "entra bootstrap: no organization found, skipping — SSO will be configured on next restart after org creation")
-		return nil
-	}
-
-	orgID := orgs[0].ID
 
 	issuer := fmt.Sprintf("https://login.microsoftonline.com/%s/v2.0", tenantID)
 	issuerAlias := fmt.Sprintf("https://sts.windows.net/%s/", tenantID)
@@ -113,4 +133,53 @@ func BootstrapEntraSSO(ctx context.Context, logger *slog.Logger, authDomainStore
 
 	logger.InfoContext(ctx, "entra bootstrap: created AuthDomain for Entra SSO", slog.String("domain", domain), slog.String("org_id", orgID.String()))
 	return nil
+}
+
+// waitForFirstOrg returns the ID of the first organization in the database,
+// polling on pollInterval until either an organization appears or waitTimeout
+// elapses. Cancellation of the parent context is honored.
+func waitForFirstOrg(ctx context.Context, logger *slog.Logger, orgGetter organization.Getter, waitTimeout time.Duration, pollInterval time.Duration) (valuer.UUID, error) {
+	// First attempt immediately so a populated database doesn't pay the poll latency.
+	orgs, err := orgGetter.ListByOwnedKeyRange(ctx)
+	if err != nil {
+		return valuer.UUID{}, fmt.Errorf("entra bootstrap: failed to list organizations: %w", err)
+	}
+	if len(orgs) > 0 {
+		return orgs[0].ID, nil
+	}
+
+	logger.InfoContext(ctx, "entra bootstrap: no organization yet, waiting for user reconciler to create one",
+		slog.Duration("timeout", waitTimeout),
+		slog.Duration("poll_interval", pollInterval),
+	)
+
+	waitCtx, cancel := context.WithTimeout(ctx, waitTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-waitCtx.Done():
+			return valuer.UUID{}, fmt.Errorf("entra bootstrap: timed out after %s waiting for first organization to be created; for SSO-first deployments set SIGNOZ_USER_ROOT_EMAIL and SIGNOZ_USER_ROOT_PASSWORD so the root user reconciler creates the bootstrap org", waitTimeout)
+		case <-ticker.C:
+			orgs, err := orgGetter.ListByOwnedKeyRange(ctx)
+			if err != nil {
+				return valuer.UUID{}, fmt.Errorf("entra bootstrap: failed to list organizations: %w", err)
+			}
+			if len(orgs) > 0 {
+				logger.InfoContext(ctx, "entra bootstrap: organization detected, proceeding", slog.String("org_id", orgs[0].ID.String()))
+				return orgs[0].ID, nil
+			}
+		}
+	}
+}
+
+// BootstrapEntraSSO is a method form of the package-level BootstrapEntraSSO that
+// uses the dependencies captured during signoz.New. Callers in cmd/community
+// invoke it after the registry has started so the user reconciler has had time
+// to create the first organization on a fresh database.
+func (s *SigNoz) BootstrapEntraSSO(ctx context.Context) error {
+	return BootstrapEntraSSO(ctx, s.entrabootstrapLogger, s.entrabootstrapAuthDomainStore, s.entrabootstrapOrgGetter)
 }

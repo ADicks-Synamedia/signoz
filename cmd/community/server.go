@@ -126,6 +126,17 @@ func runServer(ctx context.Context, config signoz.Config, logger *slog.Logger) e
 
 	signoz.Start(ctx)
 
+	if err := signoz.BootstrapEntraSSO(ctx); err != nil {
+		logger.ErrorContext(ctx, "entra sso bootstrap failed", errors.Attr(err))
+		if stopErr := server.Stop(ctx); stopErr != nil {
+			logger.ErrorContext(ctx, "failed to stop server during bootstrap cleanup", errors.Attr(stopErr))
+		}
+		if stopErr := signoz.Stop(ctx); stopErr != nil {
+			logger.ErrorContext(ctx, "failed to stop signoz during bootstrap cleanup", errors.Attr(stopErr))
+		}
+		return err
+	}
+
 	if err := signoz.Wait(ctx); err != nil {
 		logger.ErrorContext(ctx, "failed to start signoz", errors.Attr(err))
 		return err
