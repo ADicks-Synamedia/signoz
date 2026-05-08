@@ -262,7 +262,7 @@ func TestBootstrap_CreatesAuthDomain(t *testing.T) {
 	assert.Equal(t, "https://login.microsoftonline.com/test-tenant-id/v2.0", oidcConfig.Issuer)
 	assert.Equal(t, "test-client-id", oidcConfig.ClientID)
 	assert.Equal(t, "test-client-secret", oidcConfig.ClientSecret)
-	assert.Equal(t, "https://sts.windows.net/test-tenant-id/", oidcConfig.IssuerAlias)
+	assert.Empty(t, oidcConfig.IssuerAlias)
 	assert.Equal(t, "email", oidcConfig.ClaimMapping.Email)
 	assert.Equal(t, "name", oidcConfig.ClaimMapping.Name)
 	assert.Equal(t, "groups", oidcConfig.ClaimMapping.Groups)

@@ -70,7 +70,6 @@ func bootstrapEntraSSO(ctx context.Context, logger *slog.Logger, authDomainStore
 	}
 
 	issuer := fmt.Sprintf("https://login.microsoftonline.com/%s/v2.0", tenantID)
-	issuerAlias := fmt.Sprintf("https://sts.windows.net/%s/", tenantID)
 
 	groupMappings := make(map[string]string)
 	if adminGroupID := os.Getenv("SIGNOZ_ENTRA_ADMIN_GROUP_ID"); adminGroupID != "" {
@@ -90,7 +89,6 @@ func bootstrapEntraSSO(ctx context.Context, logger *slog.Logger, authDomainStore
 		AuthNProvider: authtypes.AuthNProviderOIDC,
 		OIDC: &authtypes.OIDCConfig{
 			Issuer:       issuer,
-			IssuerAlias:  issuerAlias,
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
 			ClaimMapping: authtypes.AttributeMapping{
