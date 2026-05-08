@@ -1,13 +1,13 @@
-FROM alpine:3.20.3
+FROM debian:bookworm-slim
 LABEL maintainer="signoz"
 WORKDIR /root
 
 ARG OS="linux"
 ARG TARGETARCH
 
-RUN apk update && \
-	apk add ca-certificates && \
-	rm -rf /var/cache/apk/*
+RUN apt-get update && \
+	apt-get install -y --no-install-recommends ca-certificates && \
+	rm -rf /var/lib/apt/lists/*
 
 
 COPY ./target/${OS}-${TARGETARCH}/signoz-community /root/signoz

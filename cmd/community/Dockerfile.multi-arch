@@ -1,15 +1,15 @@
-ARG ALPINE_SHA="pass-a-valid-docker-sha-otherwise-this-will-fail"
+ARG DEBIAN_SHA="pass-a-valid-docker-sha-otherwise-this-will-fail"
 
-FROM alpine@sha256:${ALPINE_SHA}
+FROM debian@sha256:${DEBIAN_SHA}
 LABEL maintainer="signoz"
 WORKDIR /root
 
 ARG OS="linux"
 ARG ARCH
 
-RUN apk update && \
-    apk add ca-certificates && \
-    rm -rf /var/cache/apk/*
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY ./target/${OS}-${ARCH}/signoz-community /root/signoz-community
 COPY ./templates/email /root/templates
